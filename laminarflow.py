@@ -1,22 +1,25 @@
-import datetime as dt
+import datetime as dtime
 import numpy as np
+from dwave_qbsolv import QBSolv
 
-# timer
-now1 = dt.datetime.now()
+# timer begins
+now1 = dtime.datetime.now()
 
 # ---------------------------------------
 # INPUT VARIABLES -----------------------
-n = 20          # number of nodes along y
-nbits = 20      # number of bits
-j0 = 20         # precision
-nu = 1.e-6      # fluid viscosity
-rho = 1.e3      # fluid density
-dpdx = -2.4e0   # pressure gradient
-u0 = 2.e-2      # initial velocity
-ly = 1.e-2      # domain size
+n = 5           # number of grid points
+nbits = 8       # precision
+j0 = 1          # position of the fixed point
+nu = 0.3e0      # fluid viscosity
+rho = 0.5e0     # fluid density
+dpdx = -2.e0    # pressure gradient
+u0 = 1.e-8      # initial velocity
+ly = 1.e0       # domain size
 dy = ly/(n - 1) # spatial step
+tol = 1.e-6     # tolerance for SS solution
+nsteps = 11     # number of time steps
 t = 0.e0        # initial time
-tol = 1.e-6     # tolerance
+alpha = 0.4e0   # for time step
 
 # ---------------------------------------
 # NUMPY ARRAYS --------------------------
@@ -25,6 +28,7 @@ b = np.zeros((n))
 y = np.zeros((n))
 u = np.zeros((n))
 u_old = np.zeros((n))
+u_bin = np.empty((n),dtype="<U10")
 ad = np.zeros((n,n*nbits))
 v = np.zeros((n*nbits))
 w = np.zeros((n*nbits,n*nbits))
@@ -40,11 +44,17 @@ for i in range(0,n):
     y[i] = i*dy
 
 # ---------------------------------------
+# TIME STEP -----------------------------
+dt = alpha*dy*dy/nu
+
+# ============================================
+# SOLUTION VIA QUANTUM COMPUTER ==============
+# ---------------------------------------
 # CONSTRUCT LINEAR SYSTEM ---------------
-def construct_linear_system(n,u,dt):
+def construct_linear_system(n, u, dt):
 
     a = np.zeros((n,n))
-    a[1,1] = 1.0
+    a[0,0] = 1.0
     for i in range(1,n-1): 
         a[i,i] = (-1.0 - 2.0*nu*dt/dy**2)
         a[i,i-1] = nu*dt/dy**2
@@ -55,7 +65,7 @@ def construct_linear_system(n,u,dt):
 
 # ---------------------------------------
 # CONVERT MATRIX TO FIXED POINT FORMAT --
-def convert_to_fixed_point(a,nbits,j0,n):
+def convert_to_fixed_point(a, nbits, j0, n):
   
     for i_n in range(0,n):
         k_it = 0
@@ -97,26 +107,17 @@ def construct_qubo_matrix(ad, b, n, nbits):
                 sum2 = sum2 + 2.0*ad[i,j]*ad[i,k]
             w[j,k] = sum2
 
-    return v, w # ???
+    return v, w
 
 # ---------------------------------------
 # SOLVE QUBO MATRIX ---------------------
-def solve_qubo(virtualQ, num_reads):
+def solve_qubo(virtualq, numreads):
 
-    # convert a problem specified as a qubo to an ising form (-1,1)
-    virtualh, virtualJ, ising_offset = util.qubo_to_ising(virtualQ)
+    #qubo = dnx.algorithms.independent_set.maximum_weighted_independent_set_qubo(G)
+    #bqm = dimod.BQM.from_qubo(qubo)
+    #sampler = ds.LeapHybridSampler()
+    #qsol = sampler.sample(bqm)
 
-    # metaheuristic provided by sapi to embed any logical problem graph to the chimera architecture
-    embeddings = embedding.find_embedding(virtualQ.keys(), adjacency)
-    h, J, Jc, newembeddings = embedding.embed_problem(virtualh, virtualJ, embeddings, adjacency)
-
-    # the solver interface to DWave QPU which solves the embedded problem
-    answer = core.solve_ising(solver, h, J, num_reads = numreads)
-
-    # post-processing algorithm to obtain a solution in the logical space
-    unembedded_answer = embedding.unembed_answer(answer["solutions"], newembeddings, broken_chains = "weighted_random")
-    qsol = map(lambda x: map(lambda y: 0.5*(y + 1), x), unembedded_answer)
-    
     return qsol
 
 # ---------------------------------------
@@ -154,7 +155,7 @@ def weighted_average(u_all):
 # SOLVE SYSTEM VIA CLASSICAL COMPUTER ---
 def solve_classic(n, a, b, u_old):
 
-    u[0] = b[1] / a[1,1]
+    u[0] = b[0] / a[0,0]
     for i in range(1,n-1):
         u[i] = (b[i] - a[i,i-1]*u_old[i-1] - a[i,i+1]*u_old[i+1]) / a[i,i]
     u[n-1] = b[n-1] / a[n-1,n-1]
@@ -162,60 +163,95 @@ def solve_classic(n, a, b, u_old):
     return u
 
 # ---------------------------------------
+# WRITE PROFILE -------------------------
+def write_prof(u, y, m, time_it):
+
+    name = "u_prof_" + str(time_it) + ".dat"
+    u_prof = open(name, "w", newline = "\n")
+    for i in range(0,m):
+        u_prof.write("%.8f" % y[i] + " ")
+        u_prof.write("%.8f" % u[i] + " ")
+        u_prof.write("\n")
+    u_prof.close()
+
+# ---------------------------------------
 # MAIN PROGRAM --------------------------
 def lam_flow_dwave(n, nbits, j0):
       
-    import numpy as np
     global u
     global u_old
     global t
 
     # solution
-    k_it = 1
+    time_it = 0
     norm = 1.e8
-    while (norm > tol):
+    while (norm > tol) and (time_it <= nsteps):
 
-        u_max = np.ndarray.max(u)
-        dt = 0.1*dy / u_max
         a = construct_linear_system(n, u_old, dt)
         ad = convert_to_fixed_point(a, nbits, j0, n)
         b = construct_rhs(n, u_old, dt)
 
         # solve system via classical computer
-        u = solve_classic(n, a, b, u_old)
+        # u = solve_classic(n, a, b, u_old)
 
         # solve system via quantum computer
-        # v, w
-        # virtualQ = construct_qubo_matrix(ad, b, n, nbits)
-        # QSol = solve_qubo(virtualQ, num_reads)
+        v, w = construct_qubo_matrix(ad, b, n, nbits)
+        response = QBSolv().sample_ising(v, w)
+        samples = list(response.samples())
+        energies = list(response.data_vectors['energy'])
+        minpos = energies.index(min(energies))
+        minen_sample = samples[minpos]
+        k_it = 1
+        for i in range(0,n):
+            start = (k_it-1)*nbits
+            end = k_it*nbits
+            for j in range(start,end):
+                u_bin[i] = u_bin[i] + str(minen_sample[j])
+            k_it = k_it + 1
+            start = (k_it-1)*nbits
+            u[i] = convert_binary_to_real(u_bin[i])
+        
+        # u = weighted_average(u_all)
+        #print("samples=" + str(list(response.samples())))
+        #print("energies=" + str(list(response.data_vectors['energy'])))
+        # qsol = solve_qubo(virtualq, numreads)
         # loop over all solution states:
-        #     u_all[i] = convert_binary_to_real(srt(QSol[i]), len(str(QSol[i])))
+        #     u_all[i] = convert_binary_to_real(srt(qsol[i]), len(str(qsol[i])))
         # u = weighted_average(u_all)
         
+        # new time
         t = t + dt
+        time_it = time_it + 1
+
+        # writing profiles
+        write_prof(u, y, n, time_it)
+
+        # matrix 2nd norm
         norm = np.linalg.norm(u - u_old)
         u_old = np.copy(u)
         
     return u
 
-# ---------------------------------------
-# DIRECT SOLUTION VIA CLASSICAL COMPUTER
+u = lam_flow_dwave(n, nbits, j0)
+# SOLUTION VIA QUANTUM COMPUTER ==============
+# ============================================
+
+# ============================================
+# DIRECT SOLUTION VIA CLASSICAL COMPUTER =====
 def lam_flow_jacobi(n):
 
-    import numpy as np
+    global u
+    global u_old
+    global t
 
     # Jacobi method
-    k_it = 1
+    time_it = 0
     norm = 1.e8
-    while (norm > tol):
+    while (norm > tol) and (time_it <= nsteps):
 
         # old value
         u_old = np.copy(u)
         
-        # time step
-        u_max = np.ndarray.max(u)
-        dt = 0.1*dy / u_max
-
         # new value
         u[0] = 0.0
         u[n-1] = 0.0
@@ -230,33 +266,25 @@ def lam_flow_jacobi(n):
             # new velocity value
             u[i] = (b[i] - a[i,i-1]*u_old[i-1] - a[i,i+1]*u_old[i+1]) / a[i,i]
 
-            # new time
-            t = t + dt
+        # new time
+        t = t + dt
+        time_it = time_it + 1
+
+        # writing profiles
+        write_prof(u, y, n, time_it)
 
         # matrix 2nd norm
         norm = np.linalg.norm(u - u_old)
 
     return u
 
-# direct solution via classical computer
-#u = lam_flow_jacobi(n)
+# u = lam_flow_jacobi(n)
+# DIRECT SOLUTION VIA CLASSICAL COMPUTER =====
+# ============================================
 
-# solution via quantum computer
-u = lam_flow_dwave(n, nbits, j0)
+# timer ends
+now2 = dtime.datetime.now()
 
-# writing profile
-def write_prof(u, y, m):
-
-    u_prof = open("../work/u_prof.dat", "w", newline = "\n")
-    for i in range(0,m):
-        u_prof.write("%.8f" % y[i] + " ")
-        u_prof.write("%.8f" % u[i] + " ")
-        u_prof.write("\n")
-    u_prof.close()
-
-# writing profiles
-write_prof(u, y, n)
-
-# timer
-now2 = dt.datetime.now()
-print ('execution time is ', (now2 - now1))
+# print execution time
+print ('The program execution is completed')
+print ('The execution time is ', (now2 - now1))
