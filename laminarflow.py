@@ -1,14 +1,15 @@
 import datetime as dtime
 import numpy as np
 from dwave_qbsolv import QBSolv
+from dimod import ExactSolver
 
 # timer begins
 now1 = dtime.datetime.now()
 
 # ---------------------------------------
 # INPUT VARIABLES -----------------------
-n = 5           # number of grid points
-nbits = 8       # precision
+n = 4           # number of grid points
+nbits = 5       # precision
 j0 = 1          # position of the fixed point
 nu = 0.3e0      # fluid viscosity
 rho = 0.5e0     # fluid density
@@ -28,7 +29,6 @@ b = np.zeros((n))
 y = np.zeros((n))
 u = np.zeros((n))
 u_old = np.zeros((n))
-u_bin = np.empty((n),dtype="<U10")
 ad = np.zeros((n,n*nbits))
 v = np.zeros((n*nbits))
 w = np.zeros((n*nbits,n*nbits))
@@ -110,17 +110,6 @@ def construct_qubo_matrix(ad, b, n, nbits):
     return v, w
 
 # ---------------------------------------
-# SOLVE QUBO MATRIX ---------------------
-def solve_qubo(virtualq, numreads):
-
-    #qubo = dnx.algorithms.independent_set.maximum_weighted_independent_set_qubo(G)
-    #bqm = dimod.BQM.from_qubo(qubo)
-    #sampler = ds.LeapHybridSampler()
-    #qsol = sampler.sample(bqm)
-
-    return qsol
-
-# ---------------------------------------
 # CONVERT FROM BINARY TO DECIMAL FORMAT -
 def convert_binary_to_real(binary, length): 
 
@@ -163,6 +152,37 @@ def solve_classic(n, a, b, u_old):
     return u
 
 # ---------------------------------------
+# SOLVE SYSTEM VIA QUANTUM COMPUTER -----
+def solve_quantum(ad, b, n, nbits):
+ 
+    v, w = construct_qubo_matrix(ad, b, n, nbits)
+    #response = QBSolv().sample_ising(v,w)
+    response = ExactSolver().sample_ising(v, w)
+    samples = list(response.samples())
+    energies = list(response.data_vectors['energy'])
+    minpos = energies.index(min(energies))
+    minen_sample = samples[minpos]
+    k_it = 1
+    u_bin = np.empty((n),dtype="<U40")
+    for i in range(0,n):
+        start = (k_it - 1)*nbits
+        end = k_it*nbits
+        dec = 0
+        for j in range(start,end):
+            if dec == j0:
+                u_bin[i] = u_bin[i] + "."
+            if minen_sample[j] == -1:
+                u_bin[i] = u_bin[i] + str(0)
+            else:
+                u_bin[i] = u_bin[i] + str(minen_sample[j])
+            dec = dec + 1
+        k_it = k_it + 1
+        start = (k_it - 1)*nbits
+        u[i] = convert_binary_to_real(u_bin[i], len(u_bin[i]))
+    
+    return u
+
+# ---------------------------------------
 # WRITE PROFILE -------------------------
 def write_prof(u, y, m, time_it):
 
@@ -192,33 +212,11 @@ def lam_flow_dwave(n, nbits, j0):
         b = construct_rhs(n, u_old, dt)
 
         # solve system via classical computer
-        # u = solve_classic(n, a, b, u_old)
+        u = solve_classic(n, a, b, u_old)
 
         # solve system via quantum computer
-        v, w = construct_qubo_matrix(ad, b, n, nbits)
-        response = QBSolv().sample_ising(v, w)
-        samples = list(response.samples())
-        energies = list(response.data_vectors['energy'])
-        minpos = energies.index(min(energies))
-        minen_sample = samples[minpos]
-        k_it = 1
-        for i in range(0,n):
-            start = (k_it-1)*nbits
-            end = k_it*nbits
-            for j in range(start,end):
-                u_bin[i] = u_bin[i] + str(minen_sample[j])
-            k_it = k_it + 1
-            start = (k_it-1)*nbits
-            u[i] = convert_binary_to_real(u_bin[i])
-        
-        # u = weighted_average(u_all)
-        #print("samples=" + str(list(response.samples())))
-        #print("energies=" + str(list(response.data_vectors['energy'])))
-        # qsol = solve_qubo(virtualq, numreads)
-        # loop over all solution states:
-        #     u_all[i] = convert_binary_to_real(srt(qsol[i]), len(str(qsol[i])))
-        # u = weighted_average(u_all)
-        
+        #u = solve_quantum(ad, b, n, nbits)
+
         # new time
         t = t + dt
         time_it = time_it + 1
