@@ -2,6 +2,8 @@ import datetime as dtime
 import numpy as np
 from dwave_qbsolv import QBSolv
 from dimod import ExactSolver
+from dimod import BinaryQuadraticModel
+from dimod import Vartype
 
 # timer begins
 now1 = dtime.datetime.now()
@@ -153,11 +155,15 @@ def solve_classic(n, a, b, u_old):
 
 # ---------------------------------------
 # SOLVE SYSTEM VIA QUANTUM COMPUTER -----
-def solve_quantum(ad, b, n, nbits):
- 
+def solve_quantum(a, b, n, nbits, j0):
+    
+    ad = convert_to_fixed_point(a, nbits, j0, n)
     v, w = construct_qubo_matrix(ad, b, n, nbits)
     #response = QBSolv().sample_ising(v,w)
-    response = ExactSolver().sample_ising(v, w)
+    #response = ExactSolver().sample_qubo(v, w)
+    offset = 0.0
+    bqm = BinaryQuadraticModel(v, w, offset, Vartype.BINARY)
+    response = ExactSolver().sample(bqm)
     samples = list(response.samples())
     energies = list(response.data_vectors['energy'])
     minpos = energies.index(min(energies))
@@ -208,14 +214,13 @@ def lam_flow_dwave(n, nbits, j0):
     while (norm > tol) and (time_it <= nsteps):
 
         a = construct_linear_system(n, u_old, dt)
-        ad = convert_to_fixed_point(a, nbits, j0, n)
         b = construct_rhs(n, u_old, dt)
 
         # solve system via classical computer
-        u = solve_classic(n, a, b, u_old)
+        #u = solve_classic(n, a, b, u_old)
 
         # solve system via quantum computer
-        #u = solve_quantum(ad, b, n, nbits)
+        u = solve_quantum(a, b, n, nbits, j0)
 
         # new time
         t = t + dt
