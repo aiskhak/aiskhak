@@ -1,28 +1,30 @@
 import datetime as dtime
 import numpy as np
-from dwave_qbsolv import QBSolv
-from dimod import ExactSolver
+#from dwave_qbsolv import QBSolv
+#from dimod import ExactSolver
 from dimod import BinaryQuadraticModel
 from dimod import Vartype
+from dwave.system.samplers import DWaveSampler
+from dwave.system.composites import EmbeddingComposite
 
 # timer begins
 now1 = dtime.datetime.now()
 
 # ---------------------------------------
 # INPUT VARIABLES -----------------------
-n = 4           # number of grid points
-nbits = 5       # precision
+n = 9           # number of grid points
+p = 9           # precision
 j0 = 1          # position of the fixed point
-nu = 0.3e0      # fluid viscosity
-rho = 0.5e0     # fluid density
+nu = 1.e-3      # fluid viscosity
+rho = 1.e3      # fluid density
 dpdx = -2.e0    # pressure gradient
 u0 = 1.e-8      # initial velocity
 ly = 1.e0       # domain size
 dy = ly/(n - 1) # spatial step
 tol = 1.e-6     # tolerance for SS solution
-nsteps = 11     # number of time steps
+nsteps = 9      # number of time steps
 t = 0.e0        # initial time
-alpha = 0.4e0   # for time step
+#alpha = 0.4e0   # for time step
 
 # ---------------------------------------
 # NUMPY ARRAYS --------------------------
@@ -31,9 +33,9 @@ b = np.zeros((n))
 y = np.zeros((n))
 u = np.zeros((n))
 u_old = np.zeros((n))
-ad = np.zeros((n,n*nbits))
-v = np.zeros((n*nbits))
-w = np.zeros((n*nbits,n*nbits))
+ad = np.zeros((n,n*p))
+v = np.zeros((n*p))
+w = np.zeros((n*p,n*p))
 
 # ---------------------------------------
 # INITIAL CONDITIONS --------------------
@@ -45,9 +47,9 @@ for i in range(0,n):
 for i in range(0,n):
     y[i] = i*dy
 
-# ---------------------------------------
+    # ---------------------------------------
 # TIME STEP -----------------------------
-dt = alpha*dy*dy/nu
+dt = 250.e0 #alpha*dy*dy/nu
 
 # ============================================
 # SOLUTION VIA QUANTUM COMPUTER ==============
@@ -67,14 +69,14 @@ def construct_linear_system(n, u, dt):
 
 # ---------------------------------------
 # CONVERT MATRIX TO FIXED POINT FORMAT --
-def convert_to_fixed_point(a, nbits, j0, n):
+def convert_to_fixed_point(a, p, j0, n):
   
     for i_n in range(0,n):
         k_it = 0
         for i in range(0,n):
             k = 0
-            start = k_it*nbits
-            end = (k_it+1)*nbits
+            start = k_it*p
+            end = (k_it+1)*p
             for j in range(start,end):
                 ad[i_n,j] = 2**(j0 - k - 1)*a[i_n,i]
                 k = k + 1
@@ -96,14 +98,14 @@ def construct_rhs(n, u_old, dt):
 
 # ---------------------------------------
 # CONSTRUCT QUBO MATRIX -----------------
-def construct_qubo_matrix(ad, b, n, nbits):
+def construct_qubo_matrix(ad, b, n, p):
 
-    for j in range (0,n*nbits):
+    for j in range (0,n*p):
         sum1 = 0.0
         for i in range (0,n):
             sum1 = sum1 + ad[i,j]*(ad[i,j] - 2.0*b[i])
         v[j] = sum1
-        for k in range (0,n*nbits):
+        for k in range (0,n*p):
             sum2 = 0.0
             for i in range (0,n):
                 sum2 = sum2 + 2.0*ad[i,j]*ad[i,k]
@@ -133,16 +135,6 @@ def convert_binary_to_real(binary, length):
 	return ans 
 
 # ---------------------------------------
-# FIND WEIGHTED AVERAGE -----------------
-def weighted_average(u_all):
-
-    global u
-
-    u = u_all   # ???
-
-    return u
-
-# ---------------------------------------
 # SOLVE SYSTEM VIA CLASSICAL COMPUTER ---
 def solve_classic(n, a, b, u_old):
 
@@ -155,24 +147,33 @@ def solve_classic(n, a, b, u_old):
 
 # ---------------------------------------
 # SOLVE SYSTEM VIA QUANTUM COMPUTER -----
-def solve_quantum(a, b, n, nbits, j0):
+def solve_quantum(a, b, n, p, j0):
     
-    ad = convert_to_fixed_point(a, nbits, j0, n)
-    v, w = construct_qubo_matrix(ad, b, n, nbits)
+    ad = convert_to_fixed_point(a, p, j0, n)
+    v, w = construct_qubo_matrix(ad, b, n, p)
     #response = QBSolv().sample_ising(v,w)
     #response = ExactSolver().sample_qubo(v, w)
+    #dwave_sampler = DWaveSampler(solver={'qpu': True})
+    #emb_sampler = EmbeddingComposite(dwave_sampler)
+    #response = sampler.sample_qubo(v, w)
+    #print(response)
+    #response = ExactSolver().sample(bqm)
+    #response = QBSolv().sample_qubo(bqm)
+    #samples = list(response.sample())
+    #energies = list(response.data_vectors['energy'])
+    #minpos = energies.index(min(energies))
     offset = 0.0
     bqm = BinaryQuadraticModel(v, w, offset, Vartype.BINARY)
-    response = ExactSolver().sample(bqm)
-    samples = list(response.samples())
-    energies = list(response.data_vectors['energy'])
-    minpos = energies.index(min(energies))
-    minen_sample = samples[minpos]
+    sampler = EmbeddingComposite(DWaveSampler())
+    response = sampler.sample(bqm)
+    sample = list(response.record)
+    min_sample = sample[[0][0]]
+    minen_sample = min_sample[0]
     k_it = 1
     u_bin = np.empty((n),dtype="<U40")
     for i in range(0,n):
-        start = (k_it - 1)*nbits
-        end = k_it*nbits
+        start = (k_it - 1)*p
+        end = k_it*p
         dec = 0
         for j in range(start,end):
             if dec == j0:
@@ -183,7 +184,7 @@ def solve_quantum(a, b, n, nbits, j0):
                 u_bin[i] = u_bin[i] + str(minen_sample[j])
             dec = dec + 1
         k_it = k_it + 1
-        start = (k_it - 1)*nbits
+        start = (k_it - 1)*p
         u[i] = convert_binary_to_real(u_bin[i], len(u_bin[i]))
     
     return u
@@ -202,7 +203,7 @@ def write_prof(u, y, m, time_it):
 
 # ---------------------------------------
 # MAIN PROGRAM --------------------------
-def lam_flow_dwave(n, nbits, j0):
+def lam_flow_dwave(n, p, j0):
       
     global u
     global u_old
@@ -210,8 +211,7 @@ def lam_flow_dwave(n, nbits, j0):
 
     # solution
     time_it = 0
-    norm = 1.e8
-    while (norm > tol) and (time_it <= nsteps):
+    while (time_it <= nsteps):
 
         a = construct_linear_system(n, u_old, dt)
         b = construct_rhs(n, u_old, dt)
@@ -220,7 +220,7 @@ def lam_flow_dwave(n, nbits, j0):
         #u = solve_classic(n, a, b, u_old)
 
         # solve system via quantum computer
-        u = solve_quantum(a, b, n, nbits, j0)
+        u = solve_quantum(a, b, n, p, j0)
 
         # new time
         t = t + dt
@@ -229,13 +229,12 @@ def lam_flow_dwave(n, nbits, j0):
         # writing profiles
         write_prof(u, y, n, time_it)
 
-        # matrix 2nd norm
-        norm = np.linalg.norm(u - u_old)
+        # old value
         u_old = np.copy(u)
         
     return u
 
-u = lam_flow_dwave(n, nbits, j0)
+u = lam_flow_dwave(n, p, j0)
 # SOLUTION VIA QUANTUM COMPUTER ==============
 # ============================================
 
@@ -249,8 +248,7 @@ def lam_flow_jacobi(n):
 
     # Jacobi method
     time_it = 0
-    norm = 1.e8
-    while (norm > tol) and (time_it <= nsteps):
+    while (time_it <= nsteps):
 
         # old value
         u_old = np.copy(u)
@@ -276,12 +274,9 @@ def lam_flow_jacobi(n):
         # writing profiles
         write_prof(u, y, n, time_it)
 
-        # matrix 2nd norm
-        norm = np.linalg.norm(u - u_old)
-
     return u
 
-# u = lam_flow_jacobi(n)
+#u = lam_flow_jacobi(n)
 # DIRECT SOLUTION VIA CLASSICAL COMPUTER =====
 # ============================================
 
